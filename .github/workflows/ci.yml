@@ -35,16 +35,8 @@ jobs:
       # binary; on CI it is cloned and built next to this repository, where the
       # tests' ../../target/release/graphrd lookup finds it.
       - name: Build GraphRD server
-        env:
-          # a read-only personal access token, for when the GraphRD repository
-          # is private; without the secret the clone is anonymous
-          GRAPHRD_TOKEN: ${{ secrets.GRAPHRD_TOKEN }}
         run: |
-          if [ -n "$GRAPHRD_TOKEN" ]; then
-            git clone --depth 1 https://x-access-token:$GRAPHRD_TOKEN@github.com/halilugur/graphrd.git ../graphrd
-          else
-            git clone --depth 1 https://github.com/halilugur/graphrd.git ../graphrd
-          fi
+          git clone --depth 1 https://github.com/halilugur/graphrd.git ../graphrd
           cargo build --release --manifest-path ../graphrd/Cargo.toml
 
       - name: Build and test
