@@ -40,4 +40,4 @@ jobs:
           cargo build --release --manifest-path ../graphrd/Cargo.toml
 
       - name: Build and test
-        run: mvn -B verify
+        run: mvn -B verify -Dgraphrd.bin=$GITHUB_WORKSPACE/../graphrd/target/release/graphrd
