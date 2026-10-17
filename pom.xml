@@ -34,9 +34,6 @@
     <url>https://github.com/halilugur/graphrd-client</url>
   </scm>
 
-  <name>GraphRD Java client</name>
-  <description>A SPARQL-first Java client and object mapper for GraphRD. Zero dependencies.</description>
-
   <properties>
     <maven.compiler.release>17</maven.compiler.release>
     <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
