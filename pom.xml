@@ -10,6 +10,31 @@
   <packaging>jar</packaging>
 
   <name>GraphRD Java client</name>
+  <description>The pure-Java client of GraphRD: SPARQL, RDF statements, repository
+    management, and a JPA-shaped object mapper with zero dependencies.</description>
+  <url>https://github.com/halilugur/graphrd-client</url>
+
+  <licenses>
+    <license>
+      <name>Apache License, Version 2.0</name>
+      <url>https://www.apache.org/licenses/LICENSE-2.0.txt</url>
+    </license>
+  </licenses>
+
+  <developers>
+    <developer>
+      <id>halilugur</id>
+      <name>Halil Ugur</name>
+    </developer>
+  </developers>
+
+  <scm>
+    <connection>scm:git:https://github.com/halilugur/graphrd-client.git</connection>
+    <developerConnection>scm:git:git@github.com:halilugur/graphrd-client.git</developerConnection>
+    <url>https://github.com/halilugur/graphrd-client</url>
+  </scm>
+
+  <name>GraphRD Java client</name>
   <description>A SPARQL-first Java client and object mapper for GraphRD. Zero dependencies.</description>
 
   <properties>

@@ -1,0 +1,43 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+          cache: maven
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-cargo-
+
+      # The integration tests boot a throwaway server from the GraphRD release
+      # binary; on CI it is cloned and built next to this repository, where the
+      # tests' ../../target/release/graphrd lookup finds it.
+      - name: Build GraphRD server
+        run: |
+          git clone --depth 1 https://github.com/halilugur/graphrd.git ../graphrd
+          cargo build --release --manifest-path ../graphrd/Cargo.toml
+
+      - name: Build and test
+        run: mvn -B verify
