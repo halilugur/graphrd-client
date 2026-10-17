@@ -12,7 +12,7 @@
   <name>GraphRD Java client</name>
   <description>The pure-Java client of GraphRD: SPARQL, RDF statements, repository
     management, and a JPA-shaped object mapper with zero dependencies.</description>
-  <url>https://github.com/halilugur/graphrd-client</url>
+  <url>https://graphrd.org</url>
 
   <licenses>
     <license>

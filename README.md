@@ -2,7 +2,7 @@
 
 # GraphRD Java client
 
-The pure-Java client library of [GraphRD](https://github.com/halilugur/graphrd) —
+The pure-Java client library of [GraphRD](https://graphrd.org) —
 SPARQL, RDF statements, repository management, and a JPA-shaped object mapper,
 with zero dependencies.
 
