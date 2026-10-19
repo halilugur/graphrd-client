@@ -4,6 +4,8 @@ import java.lang.reflect.InvocationHandler;
 import java.lang.reflect.Method;
 import java.lang.reflect.ParameterizedType;
 import java.lang.reflect.Proxy;
+import java.util.ArrayList;
+import java.util.Collection;
 import java.util.List;
 import java.util.Optional;
 
@@ -62,13 +64,19 @@ public final class RdfRepositories {
         @Override
         public Object invoke(Object proxy, Method method, Object[] args) throws Throwable {
             if (method.getDeclaringClass() == Object.class) {
-                return method.invoke(this, args);
+                return switch (method.getName()) {
+                    case "equals" -> proxy == args[0];
+                    case "hashCode" -> System.identityHashCode(proxy);
+                    default -> "RdfRepository<" + entity.getSimpleName() + ">(" + iface.getName() + ")";
+                };
+            }
+            if (method.isDefault()) {
+                return InvocationHandler.invokeDefault(proxy, method, args);
             }
             String name = method.getName();
-            boolean optional = method.getReturnType() == Optional.class;
-            Class<?> inner = optional || method.getReturnType() == Object.class
-                    ? (Class<?>) ((ParameterizedType) method.getGenericReturnType()).getActualTypeArguments()[0]
-                    : method.getReturnType();
+            Class<?> returns = method.getReturnType();
+            boolean optional = returns == Optional.class;
+            boolean many = Collection.class.isAssignableFrom(returns) || returns == Iterable.class;
 
             String head;
             Mode mode;
@@ -94,34 +102,35 @@ public final class RdfRepositories {
 
             EntityQuery<?> q = em.query(entity);
             int arg = 0;
-            for (String part : head.split("And")) {
+            // "And" joins conditions only before a capital: findByBrandName stays one field
+            for (String part : head.split("And(?=[A-Z])")) {
                 arg = condition(q, part, args, arg);
             }
             return switch (mode) {
-                case FIND -> {
-                    List<?> list = q.limit(optional ? 1 : Integer.MAX_VALUE).list();
-                    yield optional
-                            ? list.stream().findFirst().map(v -> cast(v, inner))
-                            : list;
-                }
-                case FIRST -> {
+                case FIND, FIRST -> {
+                    if (many && mode == Mode.FIND) {
+                        yield q.list();
+                    }
                     List<?> list = q.limit(1).list();
-                    yield optional
-                            ? list.stream().findFirst().map(v -> cast(v, inner))
-                            : list.isEmpty() ? null : list.get(0);
+                    if (many) {
+                        yield list;
+                    }
+                    Object first = list.isEmpty() ? null : list.get(0);
+                    yield optional ? Optional.ofNullable(first) : first; // a single entity, or null
                 }
                 case EXISTS -> q.limit(1).count() > 0;
-                case COUNT -> q.count();
+                case COUNT -> number(q.count(), returns);
                 case DELETE -> {
-                    q.list().forEach(e -> em.delete(entity, em.idOfPublic(e)));
-                    yield null;
+                    List<?> victims = q.list();
+                    victims.forEach(e -> em.delete(entity, em.idOfPublic(e)));
+                    yield returns == void.class || returns == Void.class ? null : number(victims.size(), returns);
                 }
             };
         }
 
-        @SuppressWarnings("unchecked")
-        private static Object cast(Object v, Class<?> to) {
-            return v; // the query already yields the entity type
+        /** A count in the declared numeric return type (int or long). */
+        private static Object number(long n, Class<?> returns) {
+            return returns == int.class || returns == Integer.class ? (Object) (int) n : (Object) n;
         }
 
         /** One `FieldOp` fragment of the method name, consuming its arguments. */
@@ -133,8 +142,9 @@ public final class RdfRepositories {
                     {"Like", "LIKE"}, {"In", "IN"}, {"Between", "BETWEEN"}, {"Is", "EQ"},
             };
             for (String[] op : ops) {
-                int at = part.indexOf(op[0]);
-                if (at > 0) {
+                // operators are suffixes: findByMinIncome is the field minIncome, not "min In"
+                int at = part.length() - op[0].length();
+                if (at > 0 && part.endsWith(op[0])) {
                     String field = Character.toLowerCase(part.charAt(0)) + part.substring(1, at);
                     return apply(q, field, op[1], args, arg);
                 }
@@ -146,17 +156,12 @@ public final class RdfRepositories {
 
         private int apply(EntityQuery<?> q, String field, String op, Object[] args, int arg) {
             // a reference field's equality is an IRI pattern, not a literal comparison
-            boolean ref = em.mapping(entity).props().stream()
-                    .filter(p -> p.field().getName().equals(field))
-                    .findFirst()
-                    .map(p -> p.field().getType().isAnnotationPresent(RdfType.class)
-                            || p.field().getType() == Ref.class)
-                    .orElse(false);
+            boolean ref = em.isReferenceField(entity, field);
             switch (op) {
                 case "NULL" -> q.whereNull(field);
                 case "NOTNULL" -> q.whereNotNull(field);
                 case "LIKE" -> q.whereLike(field, (String) args[arg++]);
-                case "IN" -> q.whereIn(field, List.of((Object[]) args[arg++]));
+                case "IN" -> q.whereIn(field, values(args[arg++]));
                 case "BETWEEN" -> {
                     Object lo = args[arg++];
                     Object hi = args[arg++];
@@ -173,6 +178,24 @@ public final class RdfRepositories {
                 default -> q.where(field, EntityQuery.Op.valueOf(op), args[arg++]);
             }
             return arg;
+        }
+
+        /** An In argument: a collection, an array, or a single value. */
+        private static List<?> values(Object arg) {
+            if (arg instanceof Collection<?> c) {
+                return new ArrayList<>(c);
+            }
+            if (arg instanceof Object[] a) {
+                return java.util.Arrays.asList(a);
+            }
+            if (arg != null && arg.getClass().isArray()) {
+                List<Object> out = new ArrayList<>();
+                for (int i = 0; i < java.lang.reflect.Array.getLength(arg); i++) {
+                    out.add(java.lang.reflect.Array.get(arg, i));
+                }
+                return out;
+            }
+            return List.of(arg);
         }
     }
 

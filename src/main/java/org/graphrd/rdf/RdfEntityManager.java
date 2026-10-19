@@ -110,6 +110,11 @@ public final class RdfEntityManager implements AutoCloseable {
     }
 
     <T> List<T> materializeByIris(Class<T> clazz, List<String> iris) {
+        return materializeByIris(clazz, iris, true);
+    }
+
+    /** The entities in the order of {@code iris} (a sorted query's order survives). */
+    private <T> List<T> materializeByIris(Class<T> clazz, List<String> iris, boolean withInverses) {
         if (iris.isEmpty()) {
             return List.of();
         }
@@ -117,8 +122,16 @@ public final class RdfEntityManager implements AutoCloseable {
         for (String iri : iris) {
             values.append(" <").append(iri).append(">");
         }
-        return materializeAll(clazz, bySubject(
-                "SELECT ?s ?p ?o WHERE { VALUES ?s {" + values + " } ?s ?p ?o }"));
+        Map<String, Map<String, List<String>>> found = bySubject(
+                "SELECT ?s ?p ?o WHERE { VALUES ?s {" + values + " } ?s ?p ?o }");
+        Map<String, Map<String, List<String>>> ordered = new LinkedHashMap<>();
+        for (String iri : iris) {
+            Map<String, List<String>> byPred = found.get(iri);
+            if (byPred != null) {
+                ordered.putIfAbsent(iri, byPred);
+            }
+        }
+        return materializeAll(clazz, ordered, withInverses);
     }
 
     /** A Spring-Data-style derived-query interface over this manager. */
@@ -168,13 +181,19 @@ public final class RdfEntityManager implements AutoCloseable {
         }
         StringBuilder update = new StringBuilder();
         boolean chained = false;
+        if (!stored.getOrDefault(RDF_TYPE, List.of()).contains(m.type())) {
+            update.append("INSERT DATA { <").append(id).append("> a <").append(m.type()).append("> }");
+            chained = true; // a new resource: without its type no findAll would see it
+        }
         for (Prop p : m.props()) {
             List<String> want = targetValues(entity, p);
             if (want == null) {
                 want = List.of();
             }
+            // the store answers plain values (lexical forms, bare IRIs): compare like with like
             List<String> have = stored.getOrDefault(p.predicate(), List.of());
-            if (have.size() == want.size() && new java.util.HashSet<>(have).containsAll(want)) {
+            List<String> wantPlain = plainValues(entity, p);
+            if (have.size() == wantPlain.size() && new java.util.HashSet<>(have).containsAll(wantPlain)) {
                 continue; // unchanged predicate: no write at all
             }
             if (!have.isEmpty()) {
@@ -195,6 +214,32 @@ public final class RdfEntityManager implements AutoCloseable {
             return; // nothing differs
         }
         client.update(repo, update.toString());
+    }
+
+    private static final String RDF_TYPE = "http://www.w3.org/1999/02/22-rdf-syntax-ns#type";
+
+    /** The field's values as the store answers them: IRIs bare, literals by lexical form. */
+    private List<String> plainValues(Object entity, Prop p) {
+        List<String> out = new ArrayList<>();
+        for (Object v : rawValues(entity, p)) {
+            String iri = iriOf(v);
+            out.add(iri != null ? iri : v.toString());
+        }
+        return out;
+    }
+
+    /** The field's value(s) as Java objects — empty for null. */
+    private static List<?> rawValues(Object entity, Prop p) {
+        Object v;
+        try {
+            v = p.field().get(entity);
+        } catch (IllegalAccessException e) {
+            throw new IllegalStateException(e);
+        }
+        if (v == null) {
+            return List.of();
+        }
+        return v instanceof List<?> values ? values : List.of(v);
     }
 
     /** Removes the resource with all its predicates. */
@@ -310,43 +355,36 @@ public final class RdfEntityManager implements AutoCloseable {
         Mapping m = mapping(entity.getClass());
         String id = idOf(entity);
         StringBuilder out = new StringBuilder("{\"@id\":\"").append(escape(id)).append("\",\"@type\":\"")
-                .append(m.type()).append("\"");
+                .append(escape(m.type())).append("\"");
         for (Prop p : m.props()) {
             java.util.List<String> vals = targetValues(entity, p);
             if (vals == null) {
                 continue;
             }
-            out.append(",\"").append(p.predicate()).append("\":[");
-            out.append(String.join(",", vals.stream().map(this::jsonldTerm).toList()));
+            out.append(",\"").append(escape(p.predicate())).append("\":[");
+            out.append(String.join(",", rawValues(entity, p).stream().map(v -> jsonldTerm(v, p)).toList()));
             out.append(']');
         }
         return out.append('}').toString();
     }
 
-    private String jsonldTerm(String term) {
-        if (term.startsWith("<")) { // an IRI reference
-            return "{\"@id\":\"" + escape(term.substring(1, term.length() - 1)) + "\"}";
+    /** One field value as a JSON-LD value object, shaped like {@link #term}. */
+    private static String jsonldTerm(Object v, Prop p) {
+        String iri = iriOf(v);
+        if (iri != null) { // an IRI reference
+            return "{\"@id\":\"" + escape(iri) + "\"}";
         }
-        if (term.matches("\"[^\"]*\"@\\w+")) { // lang-tagged
-            int at = term.lastIndexOf('@');
-            return "{\"@value\":" + jsonQuoted(term.substring(0, at))
-                    + ",\"@language\":\"" + term.substring(at + 1) + "\"}";
+        if (v instanceof Number || v instanceof Boolean) {
+            return v.toString();
         }
-        int hat = term.indexOf("^^");
-        if (hat > 0 && term.endsWith(">")) { // datatype
-            return "{\"@value\":" + jsonQuoted(term.substring(0, hat))
-                    + ",\"@type\":\"" + escape(term.substring(hat + 3, term.length() - 1)) + "\"}";
+        String text = "\"" + escape(v.toString()) + "\"";
+        if (!p.lang().isEmpty()) {
+            return "{\"@value\":" + text + ",\"@language\":\"" + escape(p.lang()) + "\"}";
         }
-        if (term.startsWith("\"")) { // plain string literal
-            return jsonQuoted(term);
+        if (!p.datatype().isEmpty()) {
+            return "{\"@value\":" + text + ",\"@type\":\"" + escape(p.datatype()) + "\"}";
         }
-        return term; // a number or boolean
-    }
-
-    private static String jsonQuoted(String literal) {
-        return literal.startsWith("\"") && literal.endsWith("\"") && literal.length() >= 2
-                ? literal
-                : "\"" + escape(literal) + "\"";
+        return text;
     }
 
     // ------------------------------------------------------------ mapping
@@ -394,7 +432,7 @@ public final class RdfEntityManager implements AutoCloseable {
         boolean generated = false;
         List<Prop> props = new ArrayList<>();
         List<Inv> inverses = new ArrayList<>();
-        for (Field f : c.getDeclaredFields()) {
+        for (Field f : fieldsOf(c)) {
             f.setAccessible(true);
             if (f.isAnnotationPresent(RdfId.class)) {
                 id = f;
@@ -410,6 +448,15 @@ public final class RdfEntityManager implements AutoCloseable {
             throw new IllegalArgumentException(c + " has no @RdfId field");
         }
         return new Mapping(typeIri, id, generated, props, inverses);
+    }
+
+    /** The class's fields with those of its superclasses, the topmost first. */
+    private static List<Field> fieldsOf(Class<?> c) {
+        List<Field> out = new ArrayList<>();
+        for (Class<?> k = c; k != null && k != Object.class; k = k.getSuperclass()) {
+            out.addAll(0, List.of(k.getDeclaredFields()));
+        }
+        return out;
     }
 
     // ------------------------------------------------------------ materialization
@@ -428,6 +475,14 @@ public final class RdfEntityManager implements AutoCloseable {
     /** Entities with their eager references resolved in bulk (one query per
      *  reference type), then the inverse references filled in. */
     private <T> List<T> materializeAll(Class<T> clazz, Map<String, Map<String, List<String>>> bySubject) {
+        return materializeAll(clazz, bySubject, true);
+    }
+
+    /** {@code withInverses} is false for entities read to fill an inverse field:
+     *  their own inverses stay empty, so two classes pointing at each other
+     *  cannot recurse without end. */
+    private <T> List<T> materializeAll(Class<T> clazz, Map<String, Map<String, List<String>>> bySubject,
+                                       boolean withInverses) {
         Mapping m = mapping(clazz);
         List<PendingRef> pending = new ArrayList<>();
         Map<String, T> byId = new LinkedHashMap<>();
@@ -435,7 +490,9 @@ public final class RdfEntityManager implements AutoCloseable {
             byId.put(e.getKey(), materialize(clazz, m, e.getKey(), e.getValue(), pending));
         }
         resolveInBulk(pending);
-        fillInverses(clazz, m, byId);
+        if (withInverses) {
+            fillInverses(clazz, m, byId);
+        }
         return new ArrayList<>(byId.values());
     }
 
@@ -461,7 +518,7 @@ public final class RdfEntityManager implements AutoCloseable {
             }
             List<String> iris = pointing.values().stream().flatMap(List::stream).distinct().toList();
             Map<String, Object> resolved = new LinkedHashMap<>();
-            for (Object t : materializeByIris(target, iris)) {
+            for (Object t : materializeByIris(target, iris, false)) {
                 try {
                     resolved.put(mapping(target).id().get(t).toString(), t);
                 } catch (IllegalAccessException e) {
@@ -581,7 +638,11 @@ public final class RdfEntityManager implements AutoCloseable {
             return (int) Math.round(Double.parseDouble(value));
         }
         if (type == Long.class || type == long.class) {
-            return (long) Double.parseDouble(value);
+            try {
+                return Long.parseLong(value); // exact beyond 2^53, where a double is not
+            } catch (NumberFormatException e) {
+                return (long) Double.parseDouble(value);
+            }
         }
         if (type == Double.class || type == double.class) {
             return Double.parseDouble(value);
@@ -715,11 +776,16 @@ public final class RdfEntityManager implements AutoCloseable {
     }
 
     private static String idOfAnnotated(Object v) {
-        for (Field f : v.getClass().getDeclaredFields()) {
+        for (Field f : fieldsOf(v.getClass())) {
             if (f.isAnnotationPresent(RdfId.class)) {
                 f.setAccessible(true);
                 try {
-                    return f.get(v).toString();
+                    Object id = f.get(v);
+                    if (id == null) {
+                        throw new IllegalStateException("a referenced " + v.getClass().getSimpleName()
+                                + " has no IRI yet — save it before the entity pointing at it");
+                    }
+                    return id.toString();
                 } catch (IllegalAccessException e) {
                     throw new IllegalStateException(e);
                 }

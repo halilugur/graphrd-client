@@ -94,8 +94,21 @@ public final class EntityQuery<T> {
 
     /** The field has a value. */
     public EntityQuery<T> whereNotNull(String field) {
-        patterns.add("?s <" + predicate(field) + "> ?fv" + patterns.size() + " .");
+        patterns.add("?s <" + predicate(field) + "> ?fv" + patterns.size());
         return this;
+    }
+
+    /** Equal as text, ignoring case: {@code whereIgnoreCase("name", "alice")} matches "Alice". */
+    public EntityQuery<T> whereIgnoreCase(String field, String value) {
+        String v = "?f" + patterns.size();
+        patterns.add("?s <" + predicate(field) + "> " + v + " . FILTER(LCASE(STR(" + v + ")) = LCASE("
+                + RdfEntityManager.literal(value) + "))");
+        return this;
+    }
+
+    /** Type-safe {@link #whereIgnoreCase}. */
+    public EntityQuery<T> whereIgnoreCase(Getter<T, String> field, String value) {
+        return whereIgnoreCase(field.fieldName(), value);
     }
 
     /** A SQL-LIKE pattern, case-insensitively. */
@@ -112,7 +125,7 @@ public final class EntityQuery<T> {
     public EntityQuery<T> whereLike(String field, String pattern, boolean ignoreCase) {
         String p = predicate(field);
         String v = "?f" + patterns.size();
-        String rx = likeRegex(pattern);
+        String rx = sparqlString(likeRegex(pattern));
         String flags = ignoreCase ? ", \"i\"" : "";
         patterns.add("?s <" + p + "> " + v + " . FILTER(REGEX(STR(" + v + "), \"" + rx + "\"" + flags + "))");
         return this;
@@ -120,17 +133,32 @@ public final class EntityQuery<T> {
 
     /** A SQL-LIKE pattern with {@code %} and {@code _}. */
     public EntityQuery<T> whereLike(String field, String pattern) {
-        String p = predicate(field);
-        String v = "?f" + patterns.size();
-        patterns.add("?s <" + p + "> " + v + " . FILTER(REGEX(STR(" + v + "), \"" + likeRegex(pattern) + "\"))");
-        return this;
+        return whereLike(field, pattern, false);
     }
 
+    /** The LIKE pattern as an anchored regex: {@code %} and {@code _} are the
+     *  only wildcards, every regex metacharacter matches itself. */
     private static String likeRegex(String pattern) {
-        return pattern.replace("\\", "\\\\").replace(".", "\\.").replace("*", "\\*")
-                .replace("+", "\\+").replace("?", "\\?").replace("(", "\\(").replace(")", "\\)")
-                .replace("[", "\\[").replace("]", "\\]").replace("^", "\\^").replace("$", "\\$")
-                .replace("%", ".*").replace("_", ".");
+        StringBuilder rx = new StringBuilder("^");
+        for (char c : pattern.toCharArray()) {
+            if (c == '%') {
+                rx.append(".*");
+            } else if (c == '_') {
+                rx.append('.');
+            } else {
+                if ("\\.*+?()[]{}|^$".indexOf(c) >= 0) {
+                    rx.append('\\');
+                }
+                rx.append(c);
+            }
+        }
+        return rx.append('$').toString();
+    }
+
+    /** Text escaped for the inside of a SPARQL "…" string literal. */
+    private static String sparqlString(String s) {
+        return s.replace("\\", "\\\\").replace("\"", "\\\"")
+                .replace("\n", "\\n").replace("\r", "\\r").replace("\t", "\\t");
     }
 
     /** The field's value is one of the given values. */

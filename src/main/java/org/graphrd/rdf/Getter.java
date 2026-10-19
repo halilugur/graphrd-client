@@ -21,10 +21,11 @@ public interface Getter<T, V> extends Serializable {
             replace.setAccessible(true);
             SerializedLambda lambda = (SerializedLambda) replace.invoke(this);
             String name = lambda.getImplMethodName();
-            if (name.startsWith("get")) {
+            // only a bean prefix strips: getAge → age, isActive → active, but issue stays issue
+            if (name.length() > 3 && name.startsWith("get") && Character.isUpperCase(name.charAt(3))) {
                 return Character.toLowerCase(name.charAt(3)) + name.substring(4);
             }
-            if (name.startsWith("is")) {
+            if (name.length() > 2 && name.startsWith("is") && Character.isUpperCase(name.charAt(2))) {
                 return Character.toLowerCase(name.charAt(2)) + name.substring(3);
             }
             return name;

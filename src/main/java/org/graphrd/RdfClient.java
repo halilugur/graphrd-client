@@ -15,7 +15,6 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
-import java.util.concurrent.atomic.AtomicInteger;
 
 /**
  * The low-level client: SPARQL queries and updates, statements in any RDF
@@ -176,7 +175,8 @@ public final class RdfClient implements AutoCloseable {
     public void createRepository(String repo) {
         try {
             int code = sendCode("POST", "/rest/repositories",
-                    "{\"id\":\"" + repo + "\"}", "application/json");
+                    "{\"id\":\"" + repo.replace("\\", "\\\\").replace("\"", "\\\"") + "\"}",
+                    "application/json");
             if (code != 201 && code != 409) {
                 throw new GraphRdException("create repository: HTTP " + code);
             }
@@ -250,7 +250,8 @@ public final class RdfClient implements AutoCloseable {
 
     private int sendCode(String method, String path, String body, String contentType)
             throws IOException, InterruptedException {
-        HttpRequest.Builder b = HttpRequest.newBuilder(URI.create(base + path));
+        HttpRequest.Builder b = HttpRequest.newBuilder(URI.create(base + path))
+                .timeout(requestTimeout);
         b.method(method, HttpRequest.BodyPublishers.ofString(body));
         if (contentType != null) {
             b.header("Content-Type", contentType);
@@ -259,6 +260,7 @@ public final class RdfClient implements AutoCloseable {
     }
 
     private static String enc(String s) {
-        return URLEncoder.encode(s, StandardCharsets.UTF_8);
+        // a path segment, not a form: a space is %20 (URLEncoder's "+" would arrive literally)
+        return URLEncoder.encode(s, StandardCharsets.UTF_8).replace("+", "%20");
     }
 }
